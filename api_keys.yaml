@@ -1,0 +1,19 @@
+DeepSeek-Chat:
+  model_id: deepseek-chat
+  provider: deepseek
+  api_key: ""
+
+GPT-5:
+  model_id: gpt-5
+  provider: openai
+  api_key: ""
+
+Gemini 3:
+  model_id: gemini-3-pro
+  provider: google_genai
+  api_key: ""
+
+Claude:
+  model_id: claude-3-5-sonnet-20240620
+  provider: anthropic
+  api_key: ""
