@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Any
 
 @dataclass
 class Context:
@@ -7,6 +8,8 @@ class Context:
     uploaded_sdk_docs: dict = field(default_factory=dict)      # name -> text
     uploaded_framework_files: dict = field(default_factory=dict)  # filename -> code
     metadata: dict = field(default_factory=dict)
+    memory: dict = field(default_factory=dict)                 # key -> value (Long-term memory)
+    vector_store: Any = None                                   # VectorStore instance
 
 @dataclass
 class ResponseFormat:

@@ -1,11 +1,19 @@
 from langchain.tools import tool, ToolRuntime
+from langchain_core.documents import Document
 from core.schemas import Context
+from tools.rag_tool import ensure_vector_store
 
 @tool
 def upload_sdk_doc(runtime: ToolRuntime[Context], name: str, content: str) -> str:
     """Store SDK/driver documentation text under a name."""
     runtime.context.uploaded_sdk_docs[name] = content
-    return f"SDK document '{name}' uploaded ({len(content)} chars)."
+    
+    # Also add to RAG
+    vs = ensure_vector_store(runtime.context)
+    doc = Document(page_content=content, metadata={"source": name, "type": "sdk_doc"})
+    vs.add_documents([doc])
+    
+    return f"SDK document '{name}' uploaded ({len(content)} chars) and indexed in knowledge base."
 
 @tool
 def upload_framework_file(runtime: ToolRuntime[Context], filename: str, content: str) -> str:

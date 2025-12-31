@@ -4,7 +4,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from config.settings import get_model_config
 from core.schemas import Context, ResponseFormat
-from core.tools import upload_sdk_doc, upload_framework_file, inspect_artifacts, generate_plugin_stub
+from OpenMCS_chatGPT.tools.tools import upload_sdk_doc, upload_framework_file, inspect_artifacts, generate_plugin_stub
+from tools.memory_tool import save_memory, read_memory, list_memories
+from tools.rag_tool import search_knowledge_base, add_to_knowledge_base
 
 SYSTEM_PROMPT = """
 You are an AI coding assistant integrated into a plugin-based optical microscopy control framework called OpenMCS. The framework is written primarily in Python and is used to control complex microscopy systems, including:
@@ -57,6 +59,7 @@ CODE GENERATION STYLE
   - Error handling and logging hooks appropriate for a lab control system.
 - Keep example code self-contained as far as reasonably possible, but always respect the framework’s abstractions (e.g. do not bypass the framework’s acquisition manager if the design expects everything to go through it).
 - Where necessary, show how the plugin would be registered or discovered by the framework.
+- Keep the non-code parts of the message as concise as possible, and write detailed comments in the code section.
 
 INTERACTION STYLE
 - Use clear, concise technical English.
@@ -96,7 +99,11 @@ def build_agent(config_name=None):
 
     checkpointer = InMemorySaver()
     
-    tools = [upload_sdk_doc, upload_framework_file, inspect_artifacts, generate_plugin_stub]
+    tools = [
+        # search_knowledge_base, upload_sdk_doc, add_to_knowledge_base,
+        # generate_plugin_stub,
+        # save_memory, read_memory,
+    ]
 
     return create_agent(
         model=model,

@@ -38,9 +38,10 @@ def load_source_code(directory: str):
     return docs
 
 if __name__ == "__main__":
-    file_path = "./resource/pdf_file/SCAS0134E_C13440-20CU_tec.pdf"
-    docs = load_pdf(file_path)
+    file_path = "./resources/example_code/Thorlabs_MTS50.py"
+    docs = load_source_code(file_path)
     print(len(docs))
-    for document in docs:
-        pprint(document.metadata)
+    print(docs[3].page_content)
+    # for document in docs:
+    #     pprint(document.page_content[0:50])
     # print("\n\n--> o <--\n\n".join([document.page_content for document in data]))
