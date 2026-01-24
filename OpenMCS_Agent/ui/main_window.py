@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QFileDialog
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSlot
-from PyQt5.QtGui import QColor, QFont, QIcon
+from PyQt5.QtGui import QColor, QFont, QIcon, QPixmap
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 source_dir = os.path.dirname(current_dir)
@@ -24,6 +24,7 @@ if source_dir not in sys.path:
 
 from config.settings import get_available_models
 from core.agent import build_agent
+from core.multi_agent import build_multi_agent_graph
 from core.schemas import Context
 from ui.widgets import ChatInput
 from ui.worker import AgentWorker
@@ -32,7 +33,14 @@ from ui.code_editor import CodeEditorWindow
 from utils.document_loader import load_html, load_pdf, load_json
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir)) 
+project_root = os.path.dirname(os.path.dirname(current_dir))
+
+HELLO_MESSAGE = """
+Hello, I'm a robot assistant to help you explore OpenMCS (Open Microscopy Control Software), an extensible, plugin-based device control framework developed by WeLab for advanced optical microscopy experiments！What can I do include:
+- Answer your questions about OpenMCS features and usage.
+- Assist you in generating device integration plugins based on provided SDK documentation.
+- Provide guidance on integrating microscopy devices.
+"""
 
 class OpenMCSChatWindow(QMainWindow):
     def __init__(self):
@@ -56,16 +64,9 @@ class OpenMCSChatWindow(QMainWindow):
 
         self._init_ui()
         
-        hello_message = """
-        🤖Hello, I'm a robot assistant to help you explore OpenMCS (Open Microscopy Control Software), an extensible, plugin-based device control framework developed by WeLab for advanced optical microscopy experiments！
-        ===========================================================
-        What can I do include:
-        - Answer your questions about OpenMCS features and usage.
-        - Provide guidance on integrating microscopy devices.
-        - Assist you in generating device integration plugins based on provided SDK documentation.
-        """
-        self.add_message("assistant", hello_message, is_user=False)
+        self.add_message("assistant", HELLO_MESSAGE, is_user=False)
         self.agent = build_agent(self.cbox_model.currentText())
+        # self.agent = build_multi_agent_graph(self.cbox_model.currentText()) # raw graph (for debugging)
 
     def _init_ui(self):
         font = QFont("Arial", 12)
@@ -174,15 +175,8 @@ class OpenMCSChatWindow(QMainWindow):
                 widget.deleteLater()
         
         # Re-add hello message
-        hello_message = """
-        🤖Hello, I'm a robot assistant to help you explore OpenMCS (Open Microscopy Control Software), an extensible, plugin-based device control framework developed by WeLab for advanced optical microscopy experiments！
-        ===========================================================
-        What can I do include:
-        - Answer your questions about OpenMCS features and usage.
-        - Provide guidance on integrating microscopy devices.
-        - Assist you in generating device integration plugins based on provided SDK documentation.
-        """
-        self.add_message("assistant", hello_message, is_user=False)
+
+        self.add_message("assistant", HELLO_MESSAGE, is_user=False)
         self.add_message("assistant", "Session has been reset. Memory cleared.", is_user=False)
 
     def on_upload_clicked(self):
@@ -309,6 +303,16 @@ class OpenMCSChatWindow(QMainWindow):
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 0, 0, 0)
         
+        # Parse logic for AI messages to separate role name from content
+        display_role = "Assistant"
+        display_text = text
+        if not is_user:
+            # Check for **[RoleName]** pattern at the beginning of the text
+            match = re.match(r"^\*\*\[(.*?)\]\*\*\s*", text)
+            if match:
+                display_role = match.group(1)
+                display_text = text[match.end():] # Remove the tag from the displayed text
+        
         bubble = QFrame()
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(10)
@@ -320,7 +324,7 @@ class OpenMCSChatWindow(QMainWindow):
         bubble_layout.setContentsMargins(15, 10, 15, 10)
         bubble_layout.setSpacing(0)
         
-        parts = re.split(r'(```.*?```)', text, flags=re.DOTALL)
+        parts = re.split(r'(```.*?```)', display_text, flags=re.DOTALL)
         final_html_parts = []
         
         detected_code_files = {}
@@ -358,15 +362,10 @@ class OpenMCSChatWindow(QMainWindow):
                         # from pygments.lexers import PythonLexer
                         lexer = PythonLexer()
                     
-                # 使用 Pygments 生成内联样式的 HTML
-                # style='default' (浅色) 或 'monokai' (深色，需配合深色背景)
-                # noclasses=True 强制生成内联 style，因为 QLabel 不支持 class
-                # nowrap=True 只生成 span 标签，不生成外层 div/pre，由我们自己控制外层
+                # PYGMENTS
                 formatter = HtmlFormatter(style='default', noclasses=True, nowrap=True)
                 highlighted_html = highlight(code_content, lexer, formatter)
 
-                # 包装在表格中以获得背景色和边框
-                # 使用 <pre> 标签保持格式，white-space: pre-wrap 支持自动换行
                 html_block = (
                     f"<table width='100%' bgcolor='#F8F8F8' border='0' cellspacing='0' cellpadding='10' style='margin-top:5px; margin-bottom:5px; border-radius:5px; border:1px solid #E0E0E0;'>"
                     f"<tr><td><pre style='font-family:Consolas,Monaco,monospace; font-size:16px; color:#333; margin:0; white-space:pre-wrap;'>"
@@ -381,7 +380,26 @@ class OpenMCSChatWindow(QMainWindow):
                 if not stripped_part:
                     continue
 
+                # Basic parsing: Remove bold/italic markers and convert headings to HTML
+                # Remove ** ** for bold
+                text_part = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', stripped_part)
+                # Remove * * for italic
+                text_part = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text_part)
+                # Convert ## Heading to <b>Heading</b><br>
+                text_part = re.sub(r'#{1,6}\s+(.*?)$', r'<b>\1</b><br>', text_part, flags=re.MULTILINE)
+                
+                safe_part = text_part # Skip html.escape to preserve our tags, but risky if user input has HTML. 
+                # Better approach: Escape first, then apply regex.
+
                 safe_part = html.escape(stripped_part)
+                # Re-apply markdown-like formatting on escaped string
+                # Bold
+                safe_part = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', safe_part)
+                # Italic
+                safe_part = re.sub(r'\*(.*?)\*', r'<i>\1</i>', safe_part)
+                # Headings
+                safe_part = re.sub(r'#{1,6}\s+(.*?)$', r'<b>\1</b>', safe_part, flags=re.MULTILINE)
+                
                 html_part = safe_part.replace("\n", "<br>")
                 final_html_parts.append(f"<span>{html_part}</span>")
         
@@ -394,9 +412,16 @@ class OpenMCSChatWindow(QMainWindow):
         label.setOpenExternalLinks(True)
         
         font_metrics = label.fontMetrics()
-        if len(text) > 10: 
-             label.setMinimumWidth(min(600, font_metrics.boundingRect(text).width() + 50))
-        label.setMaximumWidth(1000) 
+        
+        # Width constraints
+        if is_user:
+             if len(text) > 10: 
+                 label.setMinimumWidth(min(600, font_metrics.boundingRect(text).width() + 50))
+             label.setMaximumWidth(1000) 
+        else:
+             # AI Message expanded width
+             label.setMinimumWidth(200)
+             # No maximum width or very large to allow expansion
         
         bubble_layout.addWidget(label)
 
@@ -417,7 +442,6 @@ class OpenMCSChatWindow(QMainWindow):
                 }
                 QPushButton:hover { background-color: #218838; }
             """)
-            # Use default argument to capture the current value of files_to_show in the lambda closure
             btn_open_editor.clicked.connect(lambda checked=False, f=files_to_show: self.open_in_editor(f))
             bubble_layout.addWidget(btn_open_editor)
 
@@ -426,9 +450,57 @@ class OpenMCSChatWindow(QMainWindow):
             row_layout.addStretch()
             row_layout.addWidget(bubble)
         else:
-            bubble.setStyleSheet("QFrame { background-color: #FFFFFF; border-radius: 10px; border-top-left-radius: 2px; } QLabel { color: #333333; font-size: 18px; font-family: Arial; }")
-            row_layout.addWidget(bubble)
-            row_layout.addStretch()
+            # New UI for AI messages
+            ai_container = QWidget()
+            ai_layout = QVBoxLayout(ai_container)
+            ai_layout.setContentsMargins(0, 0, 0, 0)
+            ai_layout.setSpacing(5)
+            
+            # Header
+            header_widget = QWidget()
+            header_layout = QHBoxLayout(header_widget)
+            header_layout.setContentsMargins(5, 0, 0, 0)
+            header_layout.setSpacing(8)
+            
+            avatar_label = QLabel()
+            avatar_label.setFixedSize(24, 24)
+            
+            # Determine icon based on role
+            role_icon_map = {
+                "Supervisor": "Supervisor-Agent.png",
+                "Developer": "Developer-Agent.png",
+                "Support": "Support-Agent.png",
+                "Scientist": "Scientist-Agent.png"
+            }
+            icon_filename = role_icon_map.get(display_role, "OpenMCS-Agent.png")
+            logo_path = os.path.join(project_root, "resources", "logo", icon_filename)
+            
+            # Fallback to default if specific icon doesn't exist
+            if not os.path.exists(logo_path):
+                logo_path = os.path.join(project_root, "resources", "logo", "OpenMCS-Agent.png")
+
+            if os.path.exists(logo_path):
+                 pixmap = QPixmap(logo_path)
+                 avatar_label.setPixmap(pixmap.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                 avatar_label.setText("🤖")
+                 avatar_label.setStyleSheet("background-color: #ddd; border-radius: 12px;")
+            
+            role_label = QLabel(display_role)
+            role_label.setStyleSheet("font-weight: bold; color: #555; font-size: 14px;")
+            
+            header_layout.addWidget(avatar_label)
+            header_layout.addWidget(role_label)
+            header_layout.addStretch()
+            
+            ai_layout.addWidget(header_widget)
+            
+            # Bubble
+            bubble.setStyleSheet("QFrame { background-color: #FFFFFF; border-radius: 10px; border-top-left-radius: 2px; border: none; } QLabel { color: #333333; font-size: 18px; font-family: Arial; }")
+            ai_layout.addWidget(bubble)
+            
+            row_layout.addWidget(ai_container)
+            # No addStretch() to allow full width
 
         self.messages_layout.addWidget(row_widget)
         self._scroll_to_bottom()

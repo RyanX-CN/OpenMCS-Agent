@@ -9,7 +9,8 @@ class Context:
     uploaded_framework_files: dict = field(default_factory=dict)  # filename -> code
     metadata: dict = field(default_factory=dict)
     memory: dict = field(default_factory=dict)                 # key -> value (Long-term memory)
-    vector_store: Any = None                                   # VectorStore instance
+    vector_store: Any = None                                   # VectorStore instance (Persistent)
+    temp_vector_store: Any = None                              # VectorStore instance (Temporary)
 
 @dataclass
 class ResponseFormat:
