@@ -14,7 +14,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from config.settings import get_model_config
 from core.schemas import Context
-from OpenMCS_Agent.tools.basic_tools import upload_sdk_doc, upload_framework_file, inspect_artifacts, generate_plugin_stub
+from OpenMCS_Agent.tools.basic_tools import upload_sdk_doc, inspect_artifacts, generate_plugin_stub
+from OpenMCS_Agent.tools.code_tools import create_file, execute_python_file
 from tools.memory_tool import save_memory, read_memory, list_memories
 from tools.rag_tool import (
     search_knowledge_base,
@@ -28,7 +29,6 @@ from tools.rag_tool import (
 
 from core.context_manager import set_active_context
 
-# --- Role Definitions ---
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the Supervisor of the OpenMCS Agent team.
 Your goal is to route the user's request to the most appropriate specialist worker.
@@ -146,7 +146,7 @@ def build_multi_agent_graph(config_name=None):
     # 2. Worker Agents using create_react_agent logic
     
     developer_tools = [
-        upload_framework_file, inspect_artifacts, generate_plugin_stub, 
+        inspect_artifacts, generate_plugin_stub, create_file, execute_python_file,
         search_knowledge_base, save_memory, read_memory, list_memories,
         create_temp_knowledge_base, search_temp_knowledge_base, search_web
     ]

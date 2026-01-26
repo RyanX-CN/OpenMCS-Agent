@@ -19,21 +19,12 @@ def upload_sdk_doc(name: str, content: str) -> str:
     return f"SDK document '{name}' uploaded ({len(content)} chars) and indexed in knowledge base."
 
 @tool
-def upload_framework_file(filename: str, content: str) -> str:
-    """Store framework/plugin-interface file content."""
-    context = get_active_context()
-    if not context: return "Error: Context not active."
-    context.uploaded_framework_files[filename] = content
-    return f"Framework file '{filename}' uploaded ({len(content)} chars)."
-
-@tool
 def inspect_artifacts() -> str:
     """Return a short summary of what has been uploaded."""
     context = get_active_context()
     if not context: return "Error: Context not active."
     sdk_keys = list(context.uploaded_sdk_docs.keys())
-    fw_keys = list(context.uploaded_framework_files.keys())
-    return f"SDK docs: {sdk_keys}; framework files: {fw_keys}"
+    return f"SDK docs: {sdk_keys};"
 
 @tool
 def generate_plugin_stub(plugin_name: str, target_filename: str = None) -> str:

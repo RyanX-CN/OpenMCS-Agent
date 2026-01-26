@@ -1,10 +1,13 @@
-from langchain.chat_models import init_chat_model
+from typing import Literal
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.prebuilt import create_react_agent
 from langchain_core.messages import BaseMessage
 
 from config.settings import get_model_config
 from core.schemas import Context, ResponseFormat
-from OpenMCS_Agent.core.multi_agent import build_multi_agent_graph
+from OpenMCS_Agent.core.single_agent import build_single_agent
+from OpenMCS_Agent.core.multi_agent import build_multi_agent_graph, get_chat_model_instance
+from core.context_manager import set_active_context
 
 class MultiAgentWrapper:
     """Wrapper to make LangGraph output compatible with Main Window UI expecting ResponseFormat"""
@@ -12,7 +15,6 @@ class MultiAgentWrapper:
         self.graph = graph
 
     def invoke(self, input, config=None, context=None, **kwargs):
-        # Inject context into config for runtime access without serialization
         if config is None:
             config = {}
             
@@ -20,14 +22,12 @@ class MultiAgentWrapper:
              if "configurable" not in config:
                  config["configurable"] = {}
              config["configurable"]["context"] = context
+             # Crucial: Set the active context for tools running in this thread
+             set_active_context(context)
         
-        # Set a recursion limit to prevent infinite loops (user requested limit)
         config["recursion_limit"] = 20  # Reasonable limit for complex tasks
         
-        # Invoke the graph
         result = self.graph.invoke(input, config=config, **kwargs)
-        
-        # Process result to match ResponseFormat
         messages = result.get("messages", [])
         if messages:
             last_msg = messages[-1]
@@ -40,7 +40,22 @@ class MultiAgentWrapper:
         
         return ResponseFormat(assistant_message=str(content), files=files)
 
-def build_agent(config_name=None):
-    """构建并返回 Agent 实例"""
-    graph = build_multi_agent_graph(config_name)
-    return MultiAgentWrapper(graph)
+class AgentFactory:
+    """Factory to create different types of agents (Single vs Multi-Agent)"""
+    @staticmethod
+    def create_agent(mode: Literal["single", "multi"], config_name=None):
+        if mode == "single":
+            graph = build_single_agent(config_name)
+        else:
+            graph = build_multi_agent_graph(config_name)
+        return MultiAgentWrapper(graph)
+
+def build_agent(config_name=None, mode: str = "multi"):
+    """
+    Builds and returns an Agent instance.
+    
+    Args:
+        config_name: Configuration profile name.
+        mode: 'multi' for Supervisor-Multi-Agent, 'single' for Standalone ReAct Agent.
+    """
+    return AgentFactory.create_agent(mode, config_name)
