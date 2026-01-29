@@ -4,8 +4,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from config.settings import get_model_config
 from core.schemas import Context, ResponseFormat
-from OpenMCS_Agent.tools.basic_tools import upload_sdk_doc, inspect_artifacts, generate_plugin_stub
-from OpenMCS_Agent.tools.code_tools import create_file, execute_python_file
+from tools.basic_tools import upload_sdk_doc, inspect_artifacts, generate_plugin_stub
+from tools.code_tools import create_file, execute_python_file
 from tools.memory_tool import save_memory, read_memory, list_memories
 from tools.rag_tool import (
     search_knowledge_base,

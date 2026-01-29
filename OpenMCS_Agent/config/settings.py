@@ -13,8 +13,18 @@ os.environ["LANGCHAIN_PROJECT"] = "OpenMCS-Agent"
 
 def load_config(config_path="api_keys.yaml"):
     """Load config from a YAML file."""
+    # Check if the file exists in the current working directory
     if not os.path.exists(config_path):
-        config_path = os.path.join("..", config_path)
+        # Check relative to this file: agent/OpenMCS_Agent/config/settings.py -> agent/api_keys.yaml
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root_relative_path = os.path.join(current_dir, "..", "..", config_path)
+        
+        if os.path.exists(repo_root_relative_path):
+            config_path = repo_root_relative_path
+        else:
+            # Fallback to checking parent directory of CWD (original behavior)
+            config_path = os.path.join("..", config_path)
+
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}

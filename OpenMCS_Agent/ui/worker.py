@@ -1,5 +1,23 @@
 from PyQt5.QtCore import QThread, pyqtSignal
 from langchain_core.tracers.stdout import ConsoleCallbackHandler
+from core.agent import build_agent
+
+class AgentInitializeWorker(QThread):
+    """Initializes the Agent in a background thread"""
+    finished_signal = pyqtSignal(object, str) # agent_instance, provider_name
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, provider_name, mode="multi"):
+        super().__init__()
+        self.provider_name = provider_name
+        self.mode = mode
+
+    def run(self):
+        try:
+            agent = build_agent(self.provider_name, mode=self.mode)
+            self.finished_signal.emit(agent, self.provider_name)
+        except Exception as e:
+            self.error_signal.emit(str(e))
 
 class AgentWorker(QThread):
     """在后台运行 Agent 的 invoke 方法，避免阻塞 UI"""

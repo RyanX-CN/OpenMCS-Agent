@@ -14,8 +14,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from config.settings import get_model_config
 from core.schemas import Context
-from OpenMCS_Agent.tools.basic_tools import upload_sdk_doc, inspect_artifacts, generate_plugin_stub
-from OpenMCS_Agent.tools.code_tools import create_file, execute_python_file
+from tools.basic_tools import upload_sdk_doc, inspect_artifacts, generate_plugin_stub
+from tools.code_tools import create_file, execute_python_file
 from tools.memory_tool import save_memory, read_memory, list_memories
 from tools.rag_tool import (
     search_knowledge_base,
@@ -238,4 +238,11 @@ def build_multi_agent_graph(config_name=None):
     workflow.add_edge("Scientist", "Supervisor")
 
     checkpointer = InMemorySaver()
-    return workflow.compile(checkpointer=checkpointer)
+    agent = workflow.compile(checkpointer=checkpointer)
+    
+    # graph_png = agent.get_graph(xray=True).draw_mermaid_png()
+    # with open("agent_workflow.png", "wb") as f:
+    #     f.write(graph_png)
+    # print("Workflow graph saved to agent_workflow.png")
+        
+    return agent

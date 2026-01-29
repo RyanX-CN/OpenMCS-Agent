@@ -27,7 +27,7 @@ from core.agent import build_agent
 from core.multi_agent import build_multi_agent_graph
 from core.schemas import Context
 from ui.widgets import ChatInput
-from ui.worker import AgentWorker
+from ui.worker import AgentWorker, AgentInitializeWorker
 from ui.code_editor import CodeEditorWindow
 
 from utils.document_loader import load_html, load_pdf, load_json
@@ -65,8 +65,34 @@ class OpenMCSChatWindow(QMainWindow):
         self._init_ui()
         
         self.add_message("assistant", HELLO_MESSAGE, is_user=False)
-        self.agent = build_agent(self.cbox_model.currentText())
-        # self.agent = build_multi_agent_graph(self.cbox_model.currentText()) # raw graph (for debugging)
+        
+        # Initialize agent asynchronously
+        self.init_agent(self.cbox_model.currentText())
+
+    def init_agent(self, provider):
+        """Start background initialization of the agent."""
+        self.enable_input(False)
+        self.add_message("system", f"Initializing agent with **{provider}**... Please wait.", is_user=False)
+        
+        self.init_worker = AgentInitializeWorker(provider)
+        self.init_worker.finished_signal.connect(self.on_agent_initialized)
+        self.init_worker.error_signal.connect(self.on_agent_init_error)
+        self.init_worker.start()
+
+    def on_agent_initialized(self, agent, provider):
+        self.agent = agent
+        self.enable_input(True)
+        self.add_message("system", f"Agent initialized successfully with **{provider}**.", is_user=False)
+        # Remove the initializing message or just leave the success message
+        
+    def on_agent_init_error(self, error_msg):
+        self.add_message("system", f"❌ Failed to initialize agent: {error_msg}", is_user=False)
+        self.enable_input(True) # Re-enable so user can try again or change model
+
+    def enable_input(self, enable: bool):
+        self.input.setEnabled(enable)
+        self.send_btn.setEnabled(enable)
+        self.cbox_model.setEnabled(enable)
 
     def _init_ui(self):
         font = QFont("Arial", 12)
@@ -157,11 +183,8 @@ class OpenMCSChatWindow(QMainWindow):
     def on_model_changed(self):
         """切换模型时重新构建 Agent"""
         provider = self.cbox_model.currentText()
-        try:
-            self.agent = build_agent(provider)
-            self.add_message("assistant", f"Switched to model provider: **{provider}**", is_user=False)
-        except Exception as e:
-            self.add_message("assistant", f"Failed to switch model: {str(e)}", is_user=False)
+        # Use asynchronous initialization to prevent freezing
+        self.init_agent(provider)
 
     def on_reset_clicked(self):
         """Reset the chat session and clear history."""

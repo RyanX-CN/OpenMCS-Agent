@@ -5,8 +5,8 @@ from langchain_core.messages import BaseMessage
 
 from config.settings import get_model_config
 from core.schemas import Context, ResponseFormat
-from OpenMCS_Agent.core.single_agent import build_single_agent
-from OpenMCS_Agent.core.multi_agent import build_multi_agent_graph, get_chat_model_instance
+from core.single_agent import build_single_agent
+from core.multi_agent import build_multi_agent_graph, get_chat_model_instance
 from core.context_manager import set_active_context
 
 class MultiAgentWrapper:
