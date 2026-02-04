@@ -4,6 +4,8 @@ import re
 import html 
 import uuid
 import datetime
+import tempfile
+import shutil
 
 from pygments import highlight
 from pygments.lexers import get_lexer_by_name, guess_lexer, PythonLexer
@@ -23,14 +25,14 @@ if source_dir not in sys.path:
     sys.path.insert(0, source_dir)
 
 from config.settings import get_available_models
-from core.agent import build_agent
-from core.multi_agent import build_multi_agent_graph
+# from core.agent import build_agent # Removed heavy import
+# from core.multi_agent import build_multi_agent_graph # Removed heavy import
 from core.schemas import Context
 from ui.widgets import ChatInput
 from ui.worker import AgentWorker, AgentInitializeWorker
 from ui.code_editor import CodeEditorWindow
 
-from utils.document_loader import load_html, load_pdf, load_json
+# from utils.document_loader import load_html, load_pdf, load_json # Moved to usage to avoid heavy import
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(current_dir))
@@ -61,6 +63,7 @@ class OpenMCSChatWindow(QMainWindow):
 
         self.file_paths = []
         self.display_files_text = ""
+        self.current_attachments = [] # List of temp file paths for images
 
         self._init_ui()
         
@@ -162,6 +165,20 @@ class OpenMCSChatWindow(QMainWindow):
         main_layout.addWidget(toolbar_container, 0)
 
         # 3. 输入区域
+        input_wrapper = QWidget()
+        input_wrapper_layout = QVBoxLayout(input_wrapper)
+        input_wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        input_wrapper_layout.setSpacing(5)
+
+        # Image Attachments Preview
+        self.attachments_widget = QWidget()
+        self.attachments_layout = QHBoxLayout(self.attachments_widget)
+        self.attachments_layout.setAlignment(Qt.AlignLeft)
+        self.attachments_layout.setContentsMargins(5, 5, 5, 5)
+        self.attachments_widget.hide()
+        input_wrapper_layout.addWidget(self.attachments_widget)
+
+        # Chat Input Row
         input_container = QWidget()
         input_layout = QHBoxLayout(input_container)
         input_layout.setContentsMargins(0, 0, 0, 0)
@@ -169,6 +186,8 @@ class OpenMCSChatWindow(QMainWindow):
 
         self.input = ChatInput()
         self.input.sendMessage.connect(self.on_send_clicked)
+        self.input.pasteImage.connect(self.on_image_pasted)
+        self.input.fileDropped.connect(self.on_file_added)
 
         self.send_btn = QPushButton("Send")
         self.send_btn.setCursor(Qt.PointingHandCursor)
@@ -178,7 +197,9 @@ class OpenMCSChatWindow(QMainWindow):
 
         input_layout.addWidget(self.input)
         input_layout.addWidget(self.send_btn)
-        main_layout.addWidget(input_container, 0)
+        
+        input_wrapper_layout.addWidget(input_container)
+        main_layout.addWidget(input_wrapper, 0)
 
     def on_model_changed(self):
         """切换模型时重新构建 Agent"""
@@ -224,6 +245,9 @@ class OpenMCSChatWindow(QMainWindow):
             for file_path in self.file_paths:
                 filename = os.path.basename(file_path)
                 try:
+                    # Lazy import to avoid startup freeze
+                    from utils.document_loader import load_html, load_pdf
+
                     content = ""
                     if file_path.endswith(".pdf"):
                         docs = load_pdf(file_path)
@@ -291,6 +315,83 @@ class OpenMCSChatWindow(QMainWindow):
             }
         """)
 
+    def on_image_pasted(self, image):
+        # Save QImage to temp file
+        try:
+            temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            image.save(temp_file.name, "PNG")
+            self.current_attachments.append(temp_file.name)
+            
+            # Update UI
+            self.refresh_attachments_preview()
+        except Exception as e:
+            print(f"Error saving pasted image: {e}")
+
+    def on_file_added(self, file_path):
+        """Handle dropped or pasted file paths"""
+        if file_path not in self.current_attachments:
+            self.current_attachments.append(file_path)
+            self.refresh_attachments_preview()
+
+    def refresh_attachments_preview(self):
+        # Clear layout
+        while self.attachments_layout.count():
+            item = self.attachments_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        if not self.current_attachments:
+            self.attachments_widget.hide()
+            return
+
+        self.attachments_widget.show()
+        for idx, file_path in enumerate(self.current_attachments):
+            container = QWidget()
+            container.setFixedSize(90, 90) # Fixed container size for absolute positioning
+            
+            # Thumbnail (bottom-left aligned in the container)
+            lbl = QLabel(container)
+            pixmap = QPixmap(file_path).scaled(80, 80, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            lbl.setPixmap(pixmap)
+            lbl.setFixedSize(80, 80)
+            lbl.move(0, 10) # Offset to make room for top button
+            lbl.setStyleSheet("border: 1px solid #ccc; border-radius: 5px;")
+            
+            # Delete button (top-right overlapping)
+            btn_del = QPushButton("×", container)
+            btn_del.setFixedSize(24, 24)
+            btn_del.move(68, 0) # Overlap the top-right corner of the image (which is at x=0+80=80, y=10)
+            
+            btn_del.setCursor(Qt.PointingHandCursor)
+            btn_del.clicked.connect(lambda checked, i=idx: self.remove_attachment_at(i))
+            btn_del.setStyleSheet("""
+                QPushButton {
+                    background-color: #ff4444; 
+                    color: white; 
+                    border-radius: 12px; 
+                    font-weight: bold; 
+                    font-size: 16px;
+                    padding: 0px;
+                    border: 2px solid white;
+                }
+                QPushButton:hover { background-color: #cc0000; }
+            """)
+            
+            self.attachments_layout.addWidget(container)
+
+    def remove_attachment_at(self, index):
+        if 0 <= index < len(self.current_attachments):
+            path = self.current_attachments.pop(index)
+            # Optional: delete file? Keep for history message maybe?
+            # If we delete now, we can't send it. If we send it, we shouldn't delete immediately if async?
+            # We copy for history, so it's fine.
+            self.refresh_attachments_preview()
+
+    def clear_attachments(self):
+        # We don't delete files here immediately as they might be used in history
+        self.current_attachments.clear()
+        self.refresh_attachments_preview()
+
     def _add_waiting_message(self):
         row_widget = QWidget()
         row_layout = QHBoxLayout(row_widget)
@@ -321,7 +422,7 @@ class OpenMCSChatWindow(QMainWindow):
         
         return row_widget
 
-    def add_message(self, role, text, is_user: bool, files: dict = None):
+    def add_message(self, role, text, is_user: bool, files: dict = None, images: list = None):
         row_widget = QWidget()
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -345,8 +446,23 @@ class OpenMCSChatWindow(QMainWindow):
 
         bubble_layout = QVBoxLayout(bubble)
         bubble_layout.setContentsMargins(15, 10, 15, 10)
-        bubble_layout.setSpacing(0)
+        bubble_layout.setSpacing(5) # Increased spacing
         
+        # 1. Display Images if any
+        if images:
+             for img_path in images:
+                 try:
+                     lbl = QLabel()
+                     pixmap = QPixmap(img_path)
+                     if not pixmap.isNull():
+                         # Scale down if too big
+                         if pixmap.width() > 500:
+                             pixmap = pixmap.scaledToWidth(500, Qt.SmoothTransformation)
+                         lbl.setPixmap(pixmap)
+                         bubble_layout.addWidget(lbl)
+                 except Exception as e:
+                     print(f"Error displaying image in history: {e}")
+
         parts = re.split(r'(```.*?```)', display_text, flags=re.DOTALL)
         final_html_parts = []
         
@@ -549,10 +665,14 @@ class OpenMCSChatWindow(QMainWindow):
 
     def on_send_clicked(self):
         text = self.input.toPlainText().strip()
-        if not text: return
+        attachments = list(self.current_attachments)
+        
+        if not text and not attachments: return
 
-        self.add_message("user", text, is_user=True)
+        self.add_message("user", text, is_user=True, images=attachments)
         self.input.clear()
+        self.clear_attachments()
+        
         self.input.setDisabled(True)
         self.send_btn.setDisabled(True)
 
@@ -569,7 +689,7 @@ class OpenMCSChatWindow(QMainWindow):
         if not self.agent:
             self.agent = build_agent(self.cbox_model.currentText())
 
-        self.worker = AgentWorker(self.agent, text, self.agent_config, self.agent_context)
+        self.worker = AgentWorker(self.agent, text, self.agent_config, self.agent_context, images=attachments)
         self.worker.result_ready.connect(self.handle_agent_response)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()

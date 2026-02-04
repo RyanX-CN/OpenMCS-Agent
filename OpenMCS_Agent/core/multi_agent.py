@@ -15,7 +15,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from config.settings import get_model_config
 from core.schemas import Context
 from tools.basic_tools import upload_sdk_doc, inspect_artifacts, generate_plugin_stub
-from tools.code_tools import create_file, execute_python_file
+from tools.code_tools import create_file, execute_python_file, execute_in_process_code
 from tools.memory_tool import save_memory, read_memory, list_memories
 from tools.rag_tool import (
     search_knowledge_base,
@@ -34,8 +34,12 @@ SUPERVISOR_SYSTEM_PROMPT = """You are the Supervisor of the OpenMCS Agent team.
 Your goal is to route the user's request to the most appropriate specialist worker.
 
 The available workers are:
-1. **Developer**: Specialized in writing OpenMCS extensions, coding plugins, and debugging.
-2. **Support**: Specialized in explaining software usage, reading manuals, and providing instructions.
+1. **Developer**: Specialized in:
+    - Writing OpenMCS extensions and device plugins.
+    - **CONTROLLING DEVICES** (stages, cameras, etc.) and interacting with hardware. 
+    - **EXECUTING CODE** in the live environment.
+    - Debugging errors.
+2. **Support**: Specialized in explaining software usage, reading manuals, and providing instructions. **DO NOT** route code execution or device control tasks here.
 3. **Scientist**: Specialized in answering experimental scientific questions and general reasoning.
 
 Rules:
@@ -43,9 +47,9 @@ Rules:
 - **CRITICAL**: If the previous message was from a Worker (marked with [Developer], [Support], etc.) and it appears to answer the user's question, you **MUST** output 'FINISH'.
 - Do NOT route back to the same worker immediately unless they explicitly request it or failed.
 - If the conversation has reached a natural conclusion, output 'FINISH'.
-- If the user asks to write code, debug, or create a plugin, route to 'Developer'.
-- If the user asks how to use the software, where a button is, or for documentation, route to 'Support'.
-- If the user asks about scientific principles, experiment design, or analysis, route to 'Scientist'.
+- IF the user asks to control hardware, run code, or debug -> route to Developer.
+- IF the user asks how to use the software GUI, where a button is, or for documentation -> route to Support.
+- IF the user asks about scientific principles OR uploads an image for analysis -> route to Scientist.
 - If you are unsure, default to 'FINISH' (let the user ask again).
 
 IMPORTANT:
@@ -58,14 +62,25 @@ Output your decision as a JSON object with a single key 'next' mapping to the wo
 """
 
 DEVELOPER_PROMPT = """You are the OpenMCS Extension Developer.
-Your primary task is to implement new device plugins and maintain the codebase.
-You have access to tools for file operations and code generation.
-Always access the framework documentation and artifacts provided.
+Your primary task is to implement new device plugins, maintain the codebase, and CONTROL DEVICES.
+You have access to tools for file operations and code execution.
 
-When writing code:
-- Follow OpenMCS plugin architecture.
-- Use Python 3 and standard typing.
-- Ensure device safety.
+CRITICAL RULES FOR DEVICE CONTROL:
+1. Check Worker Existence: Before controlling a device, verify if its Plugin Worker is already created/opened.
+   - Use "OpenedPluginManager.get_opened_plugins()".
+2. Check Connection: If the worker exists, check if the device is actually connected/opened (check "m_device_dict"). If not, call 'worker.open_device()'.
+3. Execute: Only after ensuring the device is ready, execute the control command.
+   - To control live hardware or access running plugins, you must use the "execute_in_process_code" tool. Do NOT try to run `main.py` or `execute_python_file` for this purpose, as that creates a separate process without access to the hardware.
+
+   4. Simplicity: Do NOT write complex wrapper classes or try to "re-implement" the plugin logic in your script. Just find the existing instance and call its methods.
+
+CRITICAL RULES FOR FILE OPERATIONS:
+1. ASK PERMISSION: You MUST ask the user for explicit confirmation before creating or overwriting ANY local files (using `create_file`).
+2. Exception: If the user explicitly asked you to "create a file named X", you may proceed without a second confirmation.
+
+**Code Execution Environment:**
+- You are running INSIDE the OpenMCS process when using `execute_in_process_code`.
+- `ServiceManager`, `OpenedPluginManager`, `MCSPluginBase` are available in the global scope.
 """
 
 SUPPORT_PROMPT = """You are the OpenMCS Support Specialist.
@@ -117,12 +132,23 @@ def build_multi_agent_graph(config_name=None):
         # and lets the Supervisor focus on the high-level flow.
         conversation_text = ""
         for m in messages:
+            # Handle structured content (text + image) to avoid dumping base64 to Supervisor
+            content_display = ""
+            if isinstance(m.content, list):
+                for block in m.content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        content_display += block.get("text", "") + " "
+                    elif isinstance(block, dict) and block.get("type") == "image_url":
+                        content_display += "[Image Uploaded] "
+            else:
+                content_display = str(m.content)
+
             if isinstance(m, HumanMessage):
-                conversation_text += f"User: {m.content}\n\n"
+                conversation_text += f"User: {content_display}\n\n"
             elif isinstance(m, AIMessage):
                 # Only include actual checks, skip empty tool calls
-                if m.content:
-                    conversation_text += f"Assistant: {m.content}\n\n"
+                if content_display:
+                    conversation_text += f"Assistant: {content_display}\n\n"
             elif isinstance(m, SystemMessage):
                 # Skip system messages in the summary, Supervisor has its own prompt
                 pass
@@ -146,7 +172,7 @@ def build_multi_agent_graph(config_name=None):
     # 2. Worker Agents using create_react_agent logic
     
     developer_tools = [
-        inspect_artifacts, generate_plugin_stub, create_file, execute_python_file,
+        inspect_artifacts, generate_plugin_stub, create_file, execute_python_file, execute_in_process_code,
         search_knowledge_base, save_memory, read_memory, list_memories,
         create_temp_knowledge_base, search_temp_knowledge_base, search_web
     ]
@@ -175,7 +201,93 @@ def build_multi_agent_graph(config_name=None):
                 set_active_context(ctx)
 
             # Inject system prompt at the beginning of the context for this worker
-            messages_with_system = [SystemMessage(content=system_prompt)] + state['messages']
+            messages_with_system = [SystemMessage(content=system_prompt)]
+            
+            # Filter and convert messages for the worker if needed
+            # DeepSeek / Non-Vision Models specific fix:
+            # If the model provider is known to NOT support vision, we must strip the image_url content blocks
+            # Or convert them to a placeholder text.
+            # Assuming 'llm' instance has some provider info, but it might be generic.
+            # However, for robustness, we can inspect messages.
+            
+            for m in state['messages']:
+                if isinstance(m, HumanMessage) and isinstance(m.content, list):
+                    # Check if it has images
+                    has_image = any(isinstance(block, dict) and block.get("type") == "image_url" for block in m.content)
+                    if has_image:
+                        # Create a safe copy of the message for models that might crash on image_url
+                        # If the current model SUPPORTS vision (e.g. GPT-4o), we want to keep it.
+                        # If it DOES NOT (e.g. DeepSeek-V3, legacy OpenAI), we MUST remove it.
+                        # Since we don't dynamically check model capabilities here easily, 
+                        # we can try to rely on the fact that if the user uploaded an image, they EXPECT vision.
+                        
+                        # BUT, the error 400 'unknown variant `image_url`' indicates the backend model 
+                        # explicitely rejected the format. 
+                        # We should try to fallback or sanitize if we suspect non-vision model.
+                        
+                        # Fix: DeepSeek API (and some others) strictly fail on 'image_url' if not supported.
+                        # We will construct a new list without image_url if the model is deemed "text-only" 
+                        # OR if we want to be safe, we can just pass it through and hope. 
+                        # But here we clearly crashed.
+                        
+                        # Strategy: Check if the model name implies vision? 
+                        # Better strategy: Catch the 400 error? No, graph execution is hard to catch mid-node easily without retry logic.
+                        
+                        # Robust Fix: If the message has images, but we are sending to 'Developer' or 'Support' (who might use text models),
+                        # we should maybe strip it? 
+                        # Actually, Scientist is the one likely receiving it. 
+                        # If Scientist is using DeepSeek-V3 (which is text-only usually, unlike R1/Vis), it will crash.
+                        
+                        # Let's clean the message for the worker execution IF it fails?
+                        # No, we must prevention.
+                        
+                        # We will convert the mix of text/image content into just text if it's a list
+                        # UNLESS we are sure. But since we can't be sure, let's look at the error.
+                        # "unknown variant image_url".
+                        
+                        # We will modify the message to simple text "[Image Uploaded]" for the prompt
+                        # IF we are running on a non-vision model. 
+                        # Since I can't easily change the model at runtime here without major refactor,
+                        # I will sanitize the input for now to prevent the crash, assuming the user might be using a text model
+                        # but still wants to try.
+                        
+                        # Wait, if the user wants Scientist to analyze image, they NEED a vision model.
+                        # If they selected "DeepSeek" (text model), it will physically fail to send.
+                        # So we MUST strip it to avoid crash, even if it means they can't see the image.
+                        # The better fix is to use a Vision model (GPT-4o).
+                        
+                        # However, to fix the code crash:
+                        # We check if the configured LLM is likely vision-capable? 
+                        # Hard to say.
+                        
+                        # Safest approach for STABILITY: 
+                        # If the model is NOT 'gpt-4o', 'claude-3-5', 'gemini-pro-vision' etc, we strip images.
+                        # But config is global.
+                        
+                        # Let's try to pass it. If it crashes, it crashes. 
+                        # But the user IS checking DeepSeek which IS crashing.
+                        # I will add a sanitization step that keeps the text and replaces image with a placeholder
+                        # IF the model name doesn't look like a vision model.
+                        
+                        model_name = getattr(llm, "model_name", "").lower()
+                        # Keywords that suggest typical Vision-Language Models
+                        vision_keywords = ["gpt-4", "claude-3", "gemini", "vision", "omni", "qwen", "vl", "image"]
+                        is_vision = any(v in model_name for v in vision_keywords)
+                        
+                        if not is_vision:
+                            # Strip images for non-vision models to prevent 400 Bad Request
+                            text_only_blocks = [b for b in m.content if b.get("type") == "text"]
+                            clean_text = " ".join([b.get("text", "") for b in text_only_blocks])
+                            clean_text += "\n[Image Attachment Ignored: Model does not support vision]"
+                            messages_with_system.append(HumanMessage(content=clean_text))
+                        else:
+                            messages_with_system.append(m)
+                    else:
+                         messages_with_system.append(m)
+                else:
+                    messages_with_system.append(m)
+            
+            # messages_with_system = [SystemMessage(content=system_prompt)] + state['messages'] (OLD)
             
             # Invoke the agent
             result = agent_executor.invoke({"messages": messages_with_system})

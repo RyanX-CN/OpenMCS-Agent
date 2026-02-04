@@ -28,17 +28,9 @@ class MultiAgentWrapper:
         config["recursion_limit"] = 20  # Reasonable limit for complex tasks
         
         result = self.graph.invoke(input, config=config, **kwargs)
-        messages = result.get("messages", [])
-        if messages:
-            last_msg = messages[-1]
-            content = last_msg.content
-        else:
-            content = "No response generated."
-            
-        # Try to extract potential files or actions from context if available
-        files = None
-        
-        return ResponseFormat(assistant_message=str(content), files=files)
+        # Return raw result (StateDict) to let Worker handle message extraction
+        # Fixed: Previously was unwrapping messages prematurely which broke ui/worker.py logic
+        return result
 
 class AgentFactory:
     """Factory to create different types of agents (Single vs Multi-Agent)"""

@@ -5,7 +5,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from config.settings import get_model_config
 from core.schemas import Context, ResponseFormat
 from tools.basic_tools import upload_sdk_doc, inspect_artifacts, generate_plugin_stub
-from tools.code_tools import create_file, execute_python_file
+from tools.code_tools import create_file, execute_python_file, execute_in_process_code
 from tools.memory_tool import save_memory, read_memory, list_memories
 from tools.rag_tool import (
     search_knowledge_base,
@@ -112,7 +112,7 @@ def build_single_agent(config_name=None):
         list_memories, save_memory, read_memory,
         search_knowledge_base, add_to_knowledge_base,
         upload_sdk_doc, inspect_artifacts,
-        generate_plugin_stub, create_file, execute_python_file,
+        generate_plugin_stub, create_file, execute_python_file, execute_in_process_code,
         update_knowledge_base_from_files,
         rag_answer,
         create_temp_knowledge_base,
